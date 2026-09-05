@@ -115,8 +115,15 @@ async function connectToWhatsApp() {
                             msg.message;
 
             const incomingText = (content.conversation || content.extendedTextMessage?.text || "").trim();
-            const senderPhone = msg.key.remoteJid.split('@')[0]; 
+            let senderPhone = msg.key.remoteJid.split('@')[0];
 
+// If it's a multi-device LID or internal Baileys identifier (contains non-standard length or letters)
+if (msg.key.participant) {
+    senderPhone = msg.key.participant.split('@')[0];
+}
+
+// Ensure we only pass clean digits to your PHP webhook
+senderPhone = senderPhone.replace(/[^0-9]/g, '');
             if (incomingText) {
                 const payload = { message: incomingText, phone: senderPhone };
                 await sendToCrmWithRetry(sock, msg.key.remoteJid, payload);
