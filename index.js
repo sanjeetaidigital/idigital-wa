@@ -55,7 +55,7 @@ app.listen(port, '0.0.0.0', () => { setTimeout(connectToWhatsApp, 3000); });
 // Webhook Sender to cPanel[cite: 2]
 async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
     // UPDATE THIS URL TO YOUR CPANEL PHP FILE
-    const crmUrl = 'https://yourdomain.com/idigital_bot.php'; 
+    const crmUrl = 'https://idigital.rad-prop.com/idigital_bot.php'; 
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
