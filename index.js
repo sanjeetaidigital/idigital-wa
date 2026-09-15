@@ -11,14 +11,43 @@ const app = express();
 const port = process.env.PORT || 10000;
 let qrCodeDataURL = "";
 let botStatus = "Starting...";
-let sock; // Declared globally so the /send API endpoint can access the WhatsApp connection
+let sock; 
 
-// IMPORTANT: Enable JSON body parsing so Express can read payloads from cPanel PHP scripts
 app.use(express.json());
+
+// =========================================================================
+// ANTI-BAN QUEUE & HUMAN SIMULATION ENGINE
+// =========================================================================
+const messageQueue = [];
+let isProcessingQueue = false;
+
+function getRandomDelay(min = 3000, max = 7000) {
+    return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+async function processQueue() {
+    if (isProcessingQueue || messageQueue.length === 0) return;
+    isProcessingQueue = true;
+
+    while (messageQueue.length > 0) {
+        const task = messageQueue.shift();
+        try {
+            await task();
+        } catch (err) {
+            console.error("Queue task execution error:", err.message);
+        }
+        await new Promise(resolve => setTimeout(resolve, getRandomDataSpacing()));
+    }
+    isProcessingQueue = false;
+}
+
+function getRandomDataSpacing() {
+    return Math.floor(Math.random() * 2000) + 2000; // 2 to 4 seconds gap between separate users
+}
 
 // 1. CLEAN KEEP-ALIVE & STATUS ENDPOINTS
 app.get('/ping', (req, res) => res.status(200).json({ status: "awake", timestamp: Date.now() }));
-app.get('/', (req, res) => res.send(`Radiant Bot is Online. Status: ${botStatus}`));
+app.get('/', (req, res) => res.send(`iDigital Bot is Online. Status: ${botStatus}`));
 app.get('/qr', (req, res) => {
     if (botStatus === "Connected") {
         return res.send("<h2 style='font-family:Arial; color:green; text-align:center; margin-top:50px;'>✅ Bot is securely connected to WhatsApp!</h2>");
@@ -36,7 +65,7 @@ app.get('/qr', (req, res) => {
 });
 
 // =========================================================================
-// 2. THE MISSING OUTBOUND API ENDPOINT (Receives reports from cPanel & sends to WhatsApp)
+// 2. OUTBOUND API ENDPOINT (With Anti-Ban Throttling)
 // =========================================================================
 app.post('/send', async (req, res) => {
     const { phone, message } = req.body;
@@ -48,26 +77,36 @@ app.post('/send', async (req, res) => {
         return res.status(503).json({ status: "error", message: "WhatsApp socket is not connected." });
     }
     
-    try {
-        // Strip out spaces, dashes, or plus signs and format as a standard WhatsApp JID
+    messageQueue.push(async () => {
         const cleanPhone = String(phone).replace(/[^0-9]/g, '');
         const jid = `${cleanPhone}@s.whatsapp.net`;
         
+        await sock.presenceSubscribe(jid);
+        await sock.sendPresenceUpdate('composing', jid);
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(2000, 4000)));
+        await sock.sendPresenceUpdate('paused', jid);
+
         await sock.sendMessage(jid, { text: String(message) });
-        console.log(`Outbound API message successfully dispatched to ${cleanPhone}`);
-        res.status(200).json({ status: "success", message: "Message sent to WhatsApp." });
-    } catch (err) {
-        console.error(`Failed to send API message to ${phone}:`, err.message);
-        res.status(500).json({ status: "error", message: err.message });
-    }
+        console.log(`Throttled outbound API message dispatched to ${cleanPhone}`);
+    });
+
+    processQueue();
+    res.status(200).json({ status: "success", message: "Message queued for throttled delivery." });
 });
 
 app.listen(port, '0.0.0.0', () => { setTimeout(connectToWhatsApp, 3000); });
 
-// 3. AUTO-RETRY WEBHOOK SENDER (Prevents freezing during rapid typing)
+// 3. AUTO-RETRY WEBHOOK SENDER WITH HUMAN SIMULATION
 async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
     const crmUrl = 'https://idigital.rad-prop.com/idigital_bot.php'; 
     
+    try {
+        await socket.presenceSubscribe(remoteJid);
+        await socket.sendPresenceUpdate('composing', remoteJid);
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(3000, 6000)));
+        await socket.sendPresenceUpdate('paused', remoteJid);
+    } catch (presErr) {}
+
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
         try {
             const crmResponse = await axios.post(crmUrl, payload, {
@@ -76,7 +115,7 @@ async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
                     'Accept': 'application/json',
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0.0.0 Safari/537.36'
                 },
-                timeout: 20000 // 20 seconds to allow shared hosting enough time during CPU spikes
+                timeout: 20000 
             });
 
             if (crmResponse.data && crmResponse.data.reply) {
@@ -84,13 +123,14 @@ async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
             }
             return; 
         } catch (error) {
-            console.log(`Webhook attempt ${attempt} failed: ${error.message}. Retrying in 1.5s...`);
+            console.log(`Webhook attempt ${attempt} failed: ${error.message}. Retrying in 2s...`);
             if (attempt === maxRetries) {
-                console.error("All retry attempts exhausted for webhook.");
-                await socket.sendMessage(remoteJid, { text: "⚠️ Our server is momentarily busy. Please resend your last message!" });
-                break;
+                console.error("All retry attempts exhausted for webhook. Failing silently.");
+                break; // Just exits silently without messaging the user
             }
-            await new Promise(resolve => setTimeout(resolve, 1500));
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+            await new Promise(resolve => setTimeout(resolve, 2000));
         }
     }
 }
@@ -100,7 +140,6 @@ async function connectToWhatsApp() {
         const { version } = await fetchLatestBaileysVersion();
         const { state, saveCreds } = await useMultiFileAuthState('auth_session_v5');
 
-        // Assign to global sock variable
         sock = makeWASocket({
             version, auth: state,
             browser: ["Mac OS", "Chrome", "120.0.0"], 
@@ -122,7 +161,7 @@ async function connectToWhatsApp() {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // 4. UNIVERSAL MEDIA & TEXT RECEIVER
+        // 4. UNIVERSAL MEDIA & TEXT RECEIVER WITH QUEUE ENFORCEMENT
         sock.ev.on('messages.upsert', async ({ messages }) => {
             const msg = messages[0];
             if (!msg.message || msg.key.fromMe) return;
@@ -146,11 +185,9 @@ async function connectToWhatsApp() {
             let base64Image = null;
             if (isImage) {
                 try {
-                    console.log("Downloading incoming WhatsApp photo...");
                     const buffer = await downloadMediaMessage(msg, 'buffer', {}, { logger: pino({ level: 'silent' }) });
                     if (buffer) {
                         base64Image = buffer.toString('base64');
-                        console.log("Photo downloaded! Sending to CRM...");
                     }
                 } catch (imgErr) {
                     console.error("Failed to download incoming WhatsApp image:", imgErr.message);
@@ -158,15 +195,18 @@ async function connectToWhatsApp() {
             }
 
             if (incomingText || (lat && lng) || base64Image) {
-                const payload = {
-                    message: incomingText || (base64Image ? "PHOTO_UPLOADED" : "LOCATION_SHARED"),
-                    phone: senderPhone,
-                    latitude: lat,
-                    longitude: lng,
-                    media_data: base64Image
-                };
+                messageQueue.push(async () => {
+                    const payload = {
+                        message: incomingText || (base64Image ? "PHOTO_UPLOADED" : "LOCATION_SHARED"),
+                        phone: senderPhone,
+                        latitude: lat,
+                        longitude: lng,
+                        media_data: base64Image
+                    };
+                    await sendToCrmWithRetry(sock, msg.key.remoteJid, payload);
+                });
 
-                await sendToCrmWithRetry(sock, msg.key.remoteJid, payload);
+                processQueue();
             }
         });
     } catch (err) { console.error("Initialization error:", err.message); }
