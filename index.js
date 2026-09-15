@@ -130,8 +130,6 @@ async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
             }
             await new Promise(resolve => setTimeout(resolve, 2000));
         }
-            await new Promise(resolve => setTimeout(resolve, 2000));
-        }
     }
 }
 
