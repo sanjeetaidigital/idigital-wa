@@ -21,7 +21,7 @@ app.use(express.json());
 const messageQueue = [];
 let isProcessingQueue = false;
 
-function getRandomDelay(min = 3000, max = 7000) {
+function getRandomDelay(min = 4000, max = 10000) {
     return Math.floor(Math.random() * (max - min + 1)) + min;
 }
 
@@ -103,7 +103,10 @@ async function sendToCrmWithRetry(socket, remoteJid, payload, maxRetries = 3) {
     try {
         await socket.presenceSubscribe(remoteJid);
         await socket.sendPresenceUpdate('composing', remoteJid);
-        await new Promise(resolve => setTimeout(resolve, getRandomDelay(3000, 6000)));
+        
+        // ⏳ UPDATED: Random typing delay between 4 to 10 seconds
+        await new Promise(resolve => setTimeout(resolve, getRandomDelay(4000, 10000)));
+        
         await socket.sendPresenceUpdate('paused', remoteJid);
     } catch (presErr) {}
 
